@@ -1,0 +1,373 @@
+import numpy as np
+import cv2
+import glob
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+import numpy as np
+import math
+import pickle
+from IPython.display import HTML, Video
+from moviepy.editor import VideoFileClip
+#usage des classes est primordoale dans la realisation de ce projet
+#on peut facilement acceder a n'importe quel methode et standariser usage pour des futur application
+class CameraCalibration():
+    def __init__(self, image_dir, nx, ny, debug=False):
+        #initialisation de la classe de calibration pour permmettre assigner les valeurs du Object propertis
+        #nx:le nbr de carreaux qui a une intersection en horizantal dans notre chessboard
+        #ny:le nbr de carreaux qui a une intersection en vertical dans notre chessboard.
+        #image_dir:correspond au chemin des images prises par la camera en utilisant glob function
+        fnames = glob.glob("{}/*".format(image_dir))
+        objpoints = []
+        imgpoints = []
+        objp = np.zeros((nx*ny, 3), np.float32)
+        objp[:,:2] = np.mgrid[0:nx, 0:ny].T.reshape(-1, 2)
+        
+        for f in fnames:
+            img = mpimg.imread(f)
+            #une bonne pratique de passer en RGB-->GRAY pour reduire Computation time puisque on s'interesse seulment sur 
+            #la detection des lignes.
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            #la fonction essential pour la calibration de l'image:
+            #------->img:frame from while loop  that reads our record 
+            #------->(nx,ny):pattern size:C'est un tuple spécifiant la taille de l'échiquier en nombre de coins internes. 
+            ret, corners = cv2.findChessboardCorners(img, (nx, ny))
+            if ret:
+                imgpoints.append(corners)
+                objpoints.append(objp)
+
+        shape = (img.shape[1], img.shape[0])
+        #mtx and dist correspond :
+        #--------->mtx:matrice de la caméra| array:3X3
+        #--------->dist:coefficient de distorsion
+        ret, self.mtx, self.dist, _, _ = cv2.calibrateCamera(objpoints, imgpoints, shape, None, None)
+        #enregister les parametres dans un file .p pour des futurs utilisations pour optimiser le temps de calibrations des images
+        if os.path.exists('camera_parameteres.p'):
+            with open('camera_parameteres.p', mode='rb') as f:
+                #si le fichier existe fait ceci:
+                data = pickle.load(f)
+                self.mtx, self.dist = data['mtx'], data['dist']
+                print('Success du sauvegarde des parameters dans le chemin desiree')
+        else:
+            with open('camera_parameteres.p', mode='wb') as f:
+                pickle.dump({'mtx': self.mtx, 'dist': self.dist}, f)
+         #---------------------------------------------------------------------------------------------------------------   
+        if not ret:
+            raise Exception("Impossible de calibrer Camera")
+
+    def undistort(self, img):
+        #tous les images a traiter doivent etre appliquer a une distortion pour des differentes raisons.
+        #L'application de la correction de distorsion sur une image permet de compenser ces déformations
+        #et de rétablir une représentation plus précise des objets dans l'image. 
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        return cv2.undistort(img, self.mtx, self.dist, None, self.mtx)
+#cette classe a pour essentiel d'appliquer thrsholding sur image pour changer espace de couleur de image
+#pour objectif de se concentrer dans le traitement seulmengt sur la zone des lignes de la route
+class Thresholding:
+    def __init__(self):
+        #nothing to do-----------------------------
+        pass
+
+    def forward(self, img):
+        hls = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+        lower = np.array([ 0 ,160,0])
+        upper = np.array([151, 242, 255])
+        mask = cv2.inRange(hls, lower, upper)
+        img2=mask
+        return img2
+    def adaptif_thresholding_ots(self,img):
+        #application de otsu thresholding qui permet dans la plus part des cas d'une bonne detection des roues
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return binary
+    def combination_thr(self,img):
+        #appliquation du gradient thresholding qui donne meiller resultats------plus part des cas seul
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        gradient_mag = np.sqrt(sobelx ** 2 + sobely ** 2)
+        gradient_mag = np.uint8(255 * gradient_mag / np.max(gradient_mag))
+        _, binary = cv2.threshold(gradient_mag, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        mask_sobel=binary
+        #premiere model de couleur:HSV(Hue,Saturation,Value)
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        lower_white = np.array([0,0,168])  
+        upper_white = np.array([172,111,255])
+        mask_hsv = cv2.inRange(hsv, lower_white, upper_white)
+        #application des combination
+        combination1=mask_hsv|mask_sobel
+        combination2=mask_hsv|adaptif_thresholding_ots(img)
+        combination3=mask_hsv & mask_sobel
+        combination4=mask_hsv & adaptif_thresholding_ots(img)
+        combination_score = cv2.countNonZero(combined_image)
+        binary_images = [combination1, combination2, combination3,combination4]
+        num_images = len(binary_images)
+        #choisir le meilleur qui comprends les meilleur detection
+        for i in range(1, 2 ** num_images):
+            combination = format(i, f'0{num_images}b')
+            combined_image = np.zeros_like(img)
+            for j, binary_image in enumerate(binary_images):
+                if combination[j] == '1':
+                    combined_image = cv2.bitwise_or(combined_image, binary_image)
+            combination_score = cv2.countNonZero(combined_image)
+            if combination_score > best_combination_score:
+                best_combination = combined_image
+                best_combination_score = combination_score
+                
+        return best_combination
+# la perspective est une methode qui transforme les points d'une image 
+#en d'autres points correspondants dans une nouvelle vue.pour obtenir une vue plus rectiligne 
+class PerspectiveTransformation:
+    def __init__(self):
+        #initialisation des parametres de getprespective qui comprend:
+        #---->src:Ces points représentent les coins ou les repères de la région d'intérêt dans l'image source 
+        #---->dst: Ces points représentent les positions auxquelles les points src correspondants après la transformation.
+        #---->flags=specification du type de l'interpolation
+        self.src = np.float32([(397, 228),(101, 361),(1267, 336),(943, 218)])
+        self.dst = np.float32([(100, 0),
+                               (100, 720),
+                               (1100, 720),
+                               (1100, 0)])
+        self.M = cv2.getPerspectiveTransform(self.src, self.dst)
+        self.M_inv = cv2.getPerspectiveTransform(self.dst, self.src)
+
+    def forward(self, img, img_size=(1280, 720), flags=cv2.INTER_LINEAR):
+        return cv2.warpPerspective(img, self.M, img_size, flags=flags)
+    #Passage du top_View a image original
+    def backward(self, img, img_size=(1280, 720), flags=cv2.INTER_LINEAR):
+        return cv2.warpPerspective(img, self.M_inv, img_size, flags=flags)
+def hist(img):
+    #on concentre etude sur la partie moitie de histogramm puisque c'est ou il se trouve les voies
+    #tous en eiminant les bruits et les informations non necessaires 
+    bottom_half = img[img.shape[0]//2:,:]
+    return np.sum(bottom_half, axis=0)
+
+class detect_lines:
+    def __init__(self):
+        #initialisation des coefficient des parametres des lignes d'ordre 2
+         #Y=Ax^2 +Bx+C-------->second order equation
+        self.left_coeff = None
+        self.right_coeff = None
+        self.nonzero = None
+        self.zeros_posx = None
+        self.zeros_posy = None
+        self.drirection_val = []
+        #partie concernee au niveau de manipulation output_video
+        self.virage_left = mpimg.imread('left_turn.png')
+        self.virage_right = mpimg.imread('right_turn.png')
+        self.ligne_droite = mpimg.imread('straight.png')
+        self.keep_warn = mpimg.imread('seat_belt.png')
+        self.virage_left = cv2.normalize(src=self.virage_left, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        self.virage_right = cv2.normalize(src=self.virage_right, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        self.ligne_droite = cv2.normalize(src=self.ligne_droite, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        self.keep_warn = cv2.normalize(src=self.keep_warn, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        #sliding_window_technique---------------------
+        self.nwindows = 9         #9 windows or 12 for good
+        self.margin = 100
+        self.minpix = 50
+
+    def forward(self, img):
+        self.extract_features(img)
+        return self.apply_poly(img)
+
+    def coordinates_pos_windows(self, center, margin, height):
+        topleft = (center[0]-margin, center[1]-height//2)
+        bottomright = (center[0]+margin, center[1]+height//2)
+        #2 conditions pour savoir si les pixels desirees de la lignes se situe a interieur de window
+        condx = (topleft[0] <= self.zeros_posx) & (self.zeros_posx <= bottomright[0])
+        condy = (topleft[1] <= self.zeros_posy) & (self.zeros_posy <= bottomright[1])
+        return self.zeros_posx[condx&condy], self.zeros_posy[condx&condy]
+
+    def extract_features(self, img):
+        self.img = img
+        self.window_height = np.int(img.shape[0]//self.nwindows)
+        self.nonzero = img.nonzero()
+        self.zeros_posx = np.array(self.nonzero[1])
+        self.zeros_posy = np.array(self.nonzero[0])
+
+    def find_lane_pixels(self, img):
+        #pour des verification en phase de test en utilise assert qui correspond a un debugging tool
+        assert(len(img.shape) == 2)
+        #ensembe de frames de la video a manipuler pour notre final output
+        out_img = np.dstack((img, img, img))
+        #detection les positions des lignes droites et gauches en suivant les piques affiche dans histogramme
+        histogram = hist(img)
+        midpoint = histogram.shape[0]//2
+        leftx_base = np.argmax(histogram[:midpoint])
+        rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+
+        # positions relatives des lignes droites et gauches pour chaque fenetre
+        leftx_current = leftx_base
+        rightx_current = rightx_base
+        y_current = img.shape[0] + self.window_height//2
+
+        
+        leftx, lefty, rightx, righty = [], [], [], []
+
+        # iterarions toutes les fenetres
+        for _ in range(self.nwindows):
+            y_current -= self.window_height
+            center_left = (leftx_current, y_current)
+            center_right = (rightx_current, y_current)
+
+            leftx_vrai_pos, lefty_vrai_pos = self.coordinates_pos_windows(center_left, self.margin, self.window_height)
+            rightx_vrai_pos, righty_vrai_pos = self.coordinates_pos_windows(center_right, self.margin, self.window_height)
+
+            # Append these indices to the lists
+            leftx.extend(leftx_vrai_pos)
+            lefty.extend(lefty_vrai_pos)
+            rightx.extend(rightx_vrai_pos)
+            righty.extend(righty_vrai_pos)
+
+            if len(leftx_vrai_pos) > self.minpix:
+                leftx_current = np.int32(np.mean(leftx_vrai_pos))
+            if len(rightx_vrai_pos) > self.minpix:
+                rightx_current = np.int32(np.mean(rightx_vrai_pos))
+
+        return leftx, lefty, rightx, righty, out_img
+
+    def apply_poly(self, img):
+        leftx, lefty, rightx, righty, out_img = self.find_lane_pixels(img)
+        #apres 1500 acquisition des points rechercher les coefficients des 2 droites(A,B,C)
+        if len(lefty) > 1500:
+            self.left_coeff = np.polyfit(lefty, leftx, 2)
+        if len(righty) > 1500:
+            self.right_coeff = np.polyfit(righty, rightx, 2)
+
+        maxy = img.shape[0] - 1
+        miny = img.shape[0] // 3
+        if len(lefty):
+            maxy = max(maxy, np.max(lefty))
+            miny = min(miny, np.min(lefty))
+
+        if len(righty):
+            maxy = max(maxy, np.max(righty))
+            miny = min(miny, np.min(righty))
+
+        ploty = np.linspace(miny, maxy, img.shape[0])
+
+        left_fitx = self.left_coeff[0]*ploty**2 + self.left_coeff[1]*ploty + self.left_coeff[2]  #Y=Ax^2+Bx+C-->[A,B,c]de left
+        right_fitx = self.right_coeff[0]*ploty**2 + self.right_coeff[1]*ploty + self.right_coeff[2]
+
+        # Afficher les borne des voies sur la video
+        for i, y in enumerate(ploty):
+            l = int(left_fitx[i])
+            r = int(right_fitx[i])
+            y = int(y)
+            cv2.line(out_img, (l, y), (r, y), (13, 130, 165))
+
+        lR, rR, pos = self.position_vehicule()
+
+        return out_img
+
+    def plot(self, out_img):
+        np.set_printoptions(precision=6, suppress=True)
+        lR, rR, pos = self.position_vehicule()
+        value = None
+        if abs(self.left_coeff[0]) > abs(self.right_coeff[0]):
+            value = self.left_coeff[0]
+        else:
+            value = self.right_coeff[0]
+        #les parameters de la route doit etre precise pour determiner exactement la  direction
+        if abs(value)  <= 0.00015:
+            self.drirection_val.append('D') #si la pente ~= 0 --->directe lane
+        elif value < 0:    #si la pente est negatif--->left turn
+            self.drirection_val.append('L')
+        else:
+            self.drirection_val.append('R')    #sinon right_turn    
+        if len(self.drirection_val) > 10:   #puisque le nombre window est 9 
+            self.drirection_val.pop(0)      #liberer la matrice de direction pour une nouvelle window
+        
+
+        direction = max(set(self.drirection_val), key = self.drirection_val.count)
+        #position des symboles de trafic sur video
+        if direction == 'L':
+            y, x = self.virage_left[:,:,3].nonzero()
+            out_img[y, x-100+400+950//2] = self.keep_warn[y, x, :3]
+            out_img[y, x-100+400//2] = self.virage_left[y, x, :3]
+        if direction == 'R':
+            y, x = self.virage_right[:,:,3].nonzero()
+            out_img[y, x-100+400+950//2] = self.keep_warn[y, x, :3]
+            out_img[y, x-100+400//2] = self.virage_right[y, x, :3]
+        if direction == 'D':
+            y, x = self.ligne_droite[:,:,3].nonzero()
+            out_img[y, x-100+400+950//2] = self.keep_warn[y, x, :3]
+            out_img[y, x-100+400//2] = self.ligne_droite[y, x, :3]
+
+        return out_img
+
+    def position_vehicule(self):
+        #be carfull to change depending on the application
+        ym = 2.5/720                     #on suppose que la hauteur ligne hachure ente 1 et 2.5
+        X_pixel_to_meter = 4/650         #on suppose que la largeur de la route ente 3.5 et 4m
+
+        left_fit = self.left_coeff.copy()
+        right_fit = self.right_coeff.copy()
+        y_eval = 700 * ym
+
+        #R:Le rayon de courbure est calcule de la formule mathematique suivante:
+        #R = (1 + (dy/dx)^2)^(3/2) / |d^2y/dx^2|
+        virage_left =  ((1 + (2*left_coeff[0] *y_eval + left_coeff[1])**2)**1.5)  / np.absolute(2*left_coeff[0])
+        virage_droite = ((1 + (2*right_coeff[0]*y_eval + right_coeff[1])**2)**1.5) / np.absolute(2*right_coeff[0])
+        xl = np.dot(self.left_coeff, [700**2, 700, 1])    #useage de 700 c'est parce que on a pas utidie la totalite image
+        xr = np.dot(self.right_coeff, [700**2, 700, 1])   #image size:1280X720---->720 height
+        camera_center_pos=1280//2
+        center_entre_lines=(xl+xr)//2
+        pos = (camera_center_pos - center_entre_lines)*X_pixel_to_meter
+        return virage_left, virage_droite, pos 
+#la classe final qui fait appel a toutes les fonctions declare avant en suivant le meme
+#trajet Calibration-->Thresholding--->ROI---->Change_View--->Detection_Position_lanes--->Apply result to the record
+class final_class_result:
+    def __init__(self):
+        self.calibration = CameraCalibration('camera_cal', 8, 6)          #nx=8,ny=6,folder=camera_cal
+        self.thresholding = Thresholding()                                #transformer image en binaire(mask)
+        self.transform = PerspectiveTransformation()                      #changer la vue---->Top_view
+        self.lanelines = detect_lines()                                      #detection des lignes
+
+    def forward(self, img):
+        out_img = np.copy(img)
+        img = self.calibration.undistort(img)
+        img = self.transform.forward(img)
+        img = self.thresholding.forward(img)
+        img = self.lanelines.forward(img)
+        img = self.transform.backward(img)
+        #cette correspond a la combinaison des pixel des 2 imaegs
+        out_img = cv2.addWeighted(out_img, 1, img, 0.6, 0)
+        out_img = self.lanelines.plot(out_img)
+        return out_img
+
+    def video_manip(self, input_path, output_path):
+        my_vid = VideoFileClip(input_path)
+        out_vid = my_vid.fl_image(self.forward)
+        out_vid.write_videofile(output_path, audio=False)        #ignorer tous les sons prises en microphone
+    def save_frames_from_video(self,video_path, output_directory):
+        video_capture = cv2.VideoCapture(video_path)
+        if not video_capture.isOpened():
+            print(f"Error opening video file: {video_path}")
+            return
+        fps = video_capture.get(cv2.CAP_PROP_FPS)
+        frame_count = 0
+        frame_interval = int(round(fps))  
+        os.makedirs(output_directory, exist_ok=True)
+
+        while True:
+            ret, frame = video_capture.read()
+            if not ret:
+                break
+            if frame_count % frame_interval == 0:
+                output_name = os.path.join(output_directory, f"calibration{frame_count:04d}.jpg")
+                cv2.imwrite(output_name, frame)
+            frame_count += 1
+        video_capture.release()
+        print(f"Frames saved: {frame_count}")
+    video_path = 'project_video_result_1_3.mp4'
+    output_directory = 'virages_test_images/'
+    save_frames_from_video(video_path, output_directory)
+def main():
+    inp = 'my2.mp4'                                #chemin video
+    output = 'project_video_result_1_3.mp4'
+
+    final_class_result = final_class_result()
+    final_class_result.video_manip(inp, output)
+
+
+main()
